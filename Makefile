@@ -1,0 +1,40 @@
+.PHONY: up down build test test-e2e test-integration backend frontend setup help
+
+BACKEND_PORT = $(shell grep ^BACKEND_PORT .env | cut -d= -f2)
+FRONTEND_PORT = $(shell grep ^FRONTEND_PORT .env | cut -d= -f2)
+DOCKER_HOST = $(shell ifconfig | grep "inet " | grep -v 127.0.0.1 | head -1 | awk '{print $$2}')
+
+up:
+	docker compose up --build
+
+down:
+	docker compose down -v
+
+build:
+	docker compose build
+
+test:
+	cd testing && npm install && npx playwright install chromium && API_URL=http://$(DOCKER_HOST):$(BACKEND_PORT) FRONTEND_URL=http://$(DOCKER_HOST):$(FRONTEND_PORT) MYSQL_HOST=127.0.0.1 npx playwright test
+
+test-e2e:
+	cd testing && API_URL=http://$(DOCKER_HOST):$(BACKEND_PORT) FRONTEND_URL=http://$(DOCKER_HOST):$(FRONTEND_PORT) MYSQL_HOST=127.0.0.1 npx playwright test --grep @e2e
+
+test-integration:
+	cd testing && API_URL=http://$(DOCKER_HOST):$(BACKEND_PORT) FRONTEND_URL=http://$(DOCKER_HOST):$(FRONTEND_PORT) MYSQL_HOST=127.0.0.1 npx playwright test --grep @integration
+
+backend:
+	cd backend && pip install -r requirements.txt && uvicorn app.main:app --reload --host 0.0.0.0 --port $(BACKEND_PORT)
+
+frontend:
+	cd frontend && npm install && npm run dev
+
+help:
+	@echo "Targets:"
+	@echo "  up               - Build and start all services (docker compose)"
+	@echo "  down             - Stop and remove all containers"
+	@echo "  build            - Build all Docker images"
+	@echo "  test             - Run all Playwright tests in Docker"
+	@echo "  test-e2e         - Run E2E tests locally"
+	@echo "  test-integration - Run integration tests locally"
+	@echo "  backend          - Run backend locally (uvicorn)"
+	@echo "  frontend         - Run frontend locally (next dev)"

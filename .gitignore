@@ -1,0 +1,8 @@
+node_modules/
+.next/
+__pycache__/
+*.pyc
+.env
+mysql_data/
+test-results/
+playwright-report/
