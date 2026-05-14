@@ -34,16 +34,22 @@ def get_bucket(long_url: str) -> int:
 
 
 def get_next_counter(db: Session, bucket_id: int) -> int:
-    counter = db.query(BucketCounter).filter_by(bucket_id=bucket_id).with_for_update().first()
-    if counter is None:
-        counter = BucketCounter(bucket_id=bucket_id, next_counter=1)
-        db.add(counter)
-        next_val = 1
-    else:
-        next_val = counter.next_counter
-        counter.next_counter += 1
-    db.flush()
-    return next_val
+    from sqlalchemy import text
+    db.execute(
+        text(
+            "INSERT IGNORE INTO bucket_counters (bucket_id, next_counter) VALUES (:id, 1)"
+        ),
+        {"id": bucket_id},
+    )
+    result = db.execute(
+        text(
+            "UPDATE bucket_counters SET next_counter = LAST_INSERT_ID(next_counter + 1) "
+            "WHERE bucket_id = :id"
+        ),
+        {"id": bucket_id},
+    )
+    result = db.execute(text("SELECT LAST_INSERT_ID()"))
+    return result.scalar()
 
 
 def generate_short_code(db: Session, long_url: str) -> str:

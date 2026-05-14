@@ -48,10 +48,9 @@ sequenceDiagram
         Backend-->>Frontend: { short_url, short_code, long_url }
     else New URL
         Backend->>Backend: get_bucket(url) → bucket_id (MD5 % 1000)
-        Backend->>DB: SELECT ... FOR UPDATE FROM bucket_counters WHERE bucket_id = ?
-        DB-->>Backend: next_counter (or None)
-        Backend->>Backend: Increment counter
-        Backend->>DB: UPDATE bucket_counters SET next_counter += 1
+        Backend->>DB: INSERT IGNORE INTO bucket_counters (ensures row exists)
+        Backend->>DB: UPDATE bucket_counters SET next_counter = LAST_INSERT_ID(next_counter + 1)
+        DB-->>Backend: Counter value via SELECT LAST_INSERT_ID()
         Backend->>Backend: base62(bucket_id) + base62(counter) → short_code
         Backend->>DB: INSERT INTO url_mappings (short_code, long_url, ...)
         Backend->>DB: COMMIT
@@ -104,7 +103,7 @@ flowchart LR
     URL["Long URL"] --> MD5["MD5 hash"]
     MD5 --> Bucket["First 8 hex chars\n→ int % 1000\n→ bucket_id"]
     Bucket --> B62_B["base62 encode\n→ 2 chars"]
-    URL --> Counter["bucket_counters\nSELECT ... FOR UPDATE\n→ next_counter"]
+    URL --> Counter["INSERT IGNORE\n+ UPDATE ... LAST_INSERT_ID(next_counter+1)\n→ atomic counter"]
     Counter --> B62_C["base62 encode\n→ 5 chars"]
     B62_B --> Combine["short_code\n= bucket_part + counter_part"]
     B62_C --> Combine
@@ -115,21 +114,28 @@ The first 2 characters encode the bucket (0-999, giving 62² = 3844 possible val
 
 Because the bucket is derived from the URL content (via MD5), the same URL always falls into the same bucket. Combined with deduplication in `create_short_url`, identical URLs always produce the same short code.
 
+### Concurrency Safety
+
+Counter allocation uses MySQL's `LAST_INSERT_ID(next_counter + 1)` inside `UPDATE`. This is atomic at the statement level — the UPDATE acquires an exclusive row lock, increments, and returns the new value in one operation. Two concurrent requests for the same bucket are serialized by MySQL's row-level locking, guaranteeing unique counters without application-level retries.
+
 ## Testing Architecture
 
 ```mermaid
 graph TB
-    subgraph Tests["Playwright Tests"]
+    subgraph Tests["Playwright Tests (21 total)"]
         direction TB
         E2E["E2E Tests (11)\nBrowser-based UI tests"]
-        INT["Integration Tests (5)\nAPI + DB validation"]
+        INT["Integration Tests (6)\nAPI + DB validation"]
+        CON["Concurrency Tests (4)\nRace condition verification"]
     end
 
     subgraph Targets["Test Targets"]
         E2E -->|tag @e2e| make_e2e["make test-e2e"]
         INT -->|tag @integration| make_int["make test-integration"]
+        CON -->|tag @concurrency| make_con["make test-concurrency"]
         E2E -->|all tests| make_all["make test"]
         INT -->|all tests| make_all
+        CON -->|all tests| make_all
     end
 
     subgraph Env["Environment Variables"]
@@ -141,6 +147,18 @@ graph TB
     make_all --> Env
     make_e2e --> Env
     make_int --> Env
+    make_con --> Env
 ```
+
+### Concurrency Tests
+
+Four tests verify the system's behavior under concurrent load:
+
+| Test | What it validates |
+|------|-------------------|
+| Same URL 15 times | Dedup returns identical short_code |
+| 30 different URLs | All short_codes are unique |
+| 50 URLs globally | No short_code collisions at scale |
+| 3 URLs x 10 each each | Batch dedup consistency across URLs |
 
 Integration tests call the REST API directly via Playwright's `request` fixture and verify persistence by querying MySQL with `mysql2`. E2E tests run a real Chromium browser against the frontend and interact with the UI through Playwright locators.

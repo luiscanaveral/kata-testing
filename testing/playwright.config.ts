@@ -20,5 +20,10 @@ export default defineConfig({
       name: "integration",
       testMatch: "**/*.integration.spec.ts",
     },
+    {
+      name: "concurrency",
+      testMatch: "**/*.concurrency.spec.ts",
+      timeout: 120000,
+    },
   ],
 });

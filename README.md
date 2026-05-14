@@ -7,7 +7,7 @@ A scoped short code URL shortener built with FastAPI, Next.js, MySQL, and Playwr
 Two components manage short code generation:
 
 - **Bucket** — the URL's hash determines which of 1000 buckets it falls into (encoded as 2 base62 chars).
-- **Counter** — a per-bucket monotonic counter (encoded as 5 base62 chars).
+- **Counter** — a per-bucket monotonic counter (encoded as 5 base62 chars), allocated via MySQL's `LAST_INSERT_ID()` for safe concurrency.
 
 This produces 7-character short codes with no coordination between instances.
 
@@ -26,18 +26,16 @@ docker compose up --build
 ## Running Tests
 
 ```bash
-make test
+make test          # All 21 tests (E2E + integration + concurrency)
+make test-e2e      # Only E2E (11)
+make test-integration  # Only integration (6)
+make test-concurrency  # Only concurrency (4)
 ```
-
-Runs all 17 Playwright tests (6 integration + 11 E2E) from the host machine against the running containers.
 
 ## Local Development
 
 ```bash
-# Backend
 make backend     # uvicorn on :4000
-
-# Frontend
 make frontend    # next dev on :4002
 ```
 
@@ -51,6 +49,7 @@ make frontend    # next dev on :4002
 | `test` | Run all Playwright tests locally |
 | `test-e2e` | Run only E2E tests |
 | `test-integration` | Run only integration tests |
+| `test-concurrency` | Run only concurrency/race tests |
 | `backend` | Run backend locally with uvicorn |
 | `frontend` | Run frontend locally with next dev |
 
