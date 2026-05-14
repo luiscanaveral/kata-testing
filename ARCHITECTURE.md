@@ -1,174 +1,146 @@
 # Architecture
 
-## System Overview
+## Container Topology
 
 ```mermaid
 graph TB
-    subgraph "Client"
-        B[Browser / curl]
+    subgraph Host["Host Machine"]
+        Browser["Browser / Playwright"]
+        Make["make test"]
     end
 
-    subgraph "Docker Compose"
-        subgraph "Frontend"
-            N["Next.js App<br/>Port 3000"]
-        end
-
-        subgraph "Backend"
-            F["FastAPI Server<br/>Port 8000"]
-            S["Shortener Engine<br/>bucket + base62"]
-        end
-
-        subgraph "Database"
-            M[("MySQL 8.0<br/>Port 3306")]
-        end
-
-        subgraph "Testing"
-            P["Playwright Tests<br/>E2E + Integration"]
-        end
+    subgraph Docker["Docker Network"]
+        direction TB
+        Frontend["frontend:3000\nNext.js 15"]
+        Backend["backend:8000\nFastAPI"]
+        DB["db:3306\nMySQL 8.0"]
+        Frontend --> Backend
+        Backend --> DB
     end
 
-    B -- "POST /shorten" --> N
-    B -- "GET /{short_code}" --> F
-    N -- "POST /shorten (API)" --> F
-    F -- "CRUD" --> M
-    P -- "HTTP checks" --> N
-    P -- "HTTP checks" --> F
-    P -- "SQL queries" --> M
+    Browser -- "localhost:4002" --> Frontend
+    Browser -- "localhost:4000" --> Backend
+    Make -- "MYSQL_HOST=127.0.0.1:3306" --> DB
 ```
+
+## Port Mapping
+
+| Service | Container Port | Host Port |
+|---------|---------------|-----------|
+| Frontend | 3000 | 4002 |
+| Backend | 8000 | 4000 |
+| MySQL | 3306 | 3306 |
 
 ## URL Shortening Flow
 
 ```mermaid
 sequenceDiagram
-    actor U as User
-    participant UI as Frontend (Next.js)
-    participant API as Backend (FastAPI)
+    participant User as User/Browser
+    participant Frontend as Frontend (Next.js)
+    participant Backend as Backend (FastAPI)
     participant DB as MySQL
 
-    U->>UI: Paste long URL + click Shorten
-    UI->>API: POST /shorten { long_url }
-    API->>DB: SELECT from url_mappings WHERE long_url = ?
+    User->>Frontend: Enter long URL, click Shorten
+    Frontend->>Backend: POST /shorten { long_url }
+    Backend->>DB: SELECT * FROM url_mappings WHERE long_url = ?
     alt URL already exists
-        DB-->>API: existing row
-        API-->>UI: { short_url, short_code, long_url }
-    else new URL
-        API->>API: MD5(long_url) % BUCKET_SIZE → bucket_id
-        API->>DB: SELECT ... FOR UPDATE from bucket_counters WHERE bucket_id = ?
-        DB-->>API: current counter
-        API->>DB: UPDATE bucket_counters SET counter += 1
-        API->>API: base62(bucket_id) + base62(counter) → short_code
-        API->>DB: INSERT into url_mappings
-        DB-->>API: OK
-        API-->>UI: { short_url, short_code, long_url }
+        DB-->>Backend: Existing row
+        Backend-->>Frontend: { short_url, short_code, long_url }
+    else New URL
+        Backend->>Backend: get_bucket(url) → bucket_id (MD5 % 1000)
+        Backend->>DB: SELECT ... FOR UPDATE FROM bucket_counters WHERE bucket_id = ?
+        DB-->>Backend: next_counter (or None)
+        Backend->>Backend: Increment counter
+        Backend->>DB: UPDATE bucket_counters SET next_counter += 1
+        Backend->>Backend: base62(bucket_id) + base62(counter) → short_code
+        Backend->>DB: INSERT INTO url_mappings (short_code, long_url, ...)
+        Backend->>DB: COMMIT
+        Backend-->>Frontend: { short_url, short_code, long_url }
     end
-    UI-->>U: Display short URL + Copy button
+    Frontend-->>User: Display short URL + Copy button
 ```
 
-## URL Redirect Flow
+## URL Resolution Flow
 
 ```mermaid
 sequenceDiagram
-    actor U as User
-    participant API as Backend (FastAPI)
+    participant Client as Client (browser/curl)
+    participant Backend as Backend (FastAPI)
     participant DB as MySQL
 
-    U->>API: GET /{short_code}
-    API->>DB: SELECT long_url FROM url_mappings WHERE short_code = ?
-    alt exists
-        DB-->>API: long_url
-        API-->>U: 200 { long_url }
-    else not found
-        DB-->>API: empty
-        API-->>U: 404 { detail: "Short URL not found" }
+    Client->>Backend: GET /{short_code}
+    Backend->>DB: SELECT long_url FROM url_mappings WHERE short_code = ?
+    alt Found
+        DB-->>Backend: long_url
+        Backend-->>Client: 200 { long_url }
+    else Not found
+        DB-->>Backend: empty
+        Backend-->>Client: 404 { detail: "Short URL not found" }
     end
 ```
 
-## Bucket Strategy
+## Database Schema
 
 ```mermaid
-flowchart TD
-    A["long_url"] --> B["MD5 hash"]
-    B --> C["First 8 hex chars<br/>→ int"]
-    C --> D["mod BUCKET_SIZE<br/>(1000)"]
-    D --> E["bucket_id (0-999)"]
+erDiagram
+    url_mappings {
+        bigint id PK
+        varchar short_code UK "7 chars, base62"
+        varchar long_url "Original URL (2048)"
+        int bucket_id "0-999, indexed"
+        bigint counter "Monotonic per bucket"
+    }
 
-    E --> F["SELECT ... FOR UPDATE<br/>bucket_counters"]
-    F --> G["next_counter value"]
-    G --> H["counter += 1"]
-
-    E --> I["base62(bucket_id)<br/>padded to 2 chars"]
-    H --> J["base62(counter)<br/>padded to 5 chars"]
-
-    I --> K["short_code<br/>(7 chars total)"]
-    J --> K
-
-    K --> L["INSERT url_mappings<br/>(short_code, long_url, bucket_id, counter)"]
+    bucket_counters {
+        int bucket_id PK "0-999"
+        bigint next_counter "Next value to assign"
+    }
 ```
 
-## Testing Pyramid
+## Short Code Generation
 
 ```mermaid
-flowchart TB
-    subgraph "E2E Tests"
-        T1["UI form submit → short URL displayed"]
-        T2["Short URL resolves to original"]
-        T3["Copy button visible after shorten"]
-        T4["Loading state during request"]
-        T5["Error state on API failure"]
-    end
-
-    subgraph "Integration Tests"
-        T6["POST /shorten → DB record created"]
-        T7["GET /{code} → resolves long URL"]
-        T8["Duplicate URL → same short code"]
-        T9["Unknown code → 404"]
-        T10["Bucket counters increment"]
-    end
-
-    subgraph "Unit Tests"
-        T11["base62 encode/decode"]
-        T12["get_bucket distribution"]
-        T13["short_code format validation"]
-    end
-
-    T11 --> T12 --> T13
-    T6 --> T7 --> T8 --> T9 --> T10
-    T1 --> T2 --> T3 --> T4 --> T5
+flowchart LR
+    URL["Long URL"] --> MD5["MD5 hash"]
+    MD5 --> Bucket["First 8 hex chars\n→ int % 1000\n→ bucket_id"]
+    Bucket --> B62_B["base62 encode\n→ 2 chars"]
+    URL --> Counter["bucket_counters\nSELECT ... FOR UPDATE\n→ next_counter"]
+    Counter --> B62_C["base62 encode\n→ 5 chars"]
+    B62_B --> Combine["short_code\n= bucket_part + counter_part"]
+    B62_C --> Combine
+    Combine --> Result["7-char short code\ne.g. 'a3G0001'"]
 ```
 
-## Directory Layout
+The first 2 characters encode the bucket (0-999, giving 62² = 3844 possible values, well above the 1000 needed). The remaining 5 characters encode the counter (up to 62⁵ ≈ 916 million per bucket).
 
+Because the bucket is derived from the URL content (via MD5), the same URL always falls into the same bucket. Combined with deduplication in `create_short_url`, identical URLs always produce the same short code.
+
+## Testing Architecture
+
+```mermaid
+graph TB
+    subgraph Tests["Playwright Tests"]
+        direction TB
+        E2E["E2E Tests (11)\nBrowser-based UI tests"]
+        INT["Integration Tests (5)\nAPI + DB validation"]
+    end
+
+    subgraph Targets["Test Targets"]
+        E2E -->|tag @e2e| make_e2e["make test-e2e"]
+        INT -->|tag @integration| make_int["make test-integration"]
+        E2E -->|all tests| make_all["make test"]
+        INT -->|all tests| make_all
+    end
+
+    subgraph Env["Environment Variables"]
+        API["API_URL=http://localhost:4000"]
+        FE["FRONTEND_URL=http://localhost:4002"]
+        DB_HOST["MYSQL_HOST=127.0.0.1"]
+    end
+
+    make_all --> Env
+    make_e2e --> Env
+    make_int --> Env
 ```
-kata-testing/
-├── .env                  # Shared env vars (DB creds, ports, config)
-├── docker-compose.yml    # Orchestrates db + backend + frontend + tests
-├── Makefile              # Dev workflow shortcuts
-├── ARCHITECTURE.md       # This file
-├── AGENTS.md             # Commands reference
-│
-├── backend/
-│   ├── Dockerfile
-│   ├── requirements.txt
-│   └── app/
-│       ├── main.py       # FastAPI routes
-│       ├── database.py   # SQLAlchemy + MySQL connection
-│       ├── models.py     # ORM models (UrlMapping, BucketCounter)
-│       ├── schemas.py    # Pydantic request/response schemas
-│       └── shortener.py  # Bucket strategy + base62 encoding
-│
-├── frontend/
-│   ├── Dockerfile
-│   ├── package.json
-│   └── app/
-│       ├── layout.tsx
-│       ├── page.tsx      # URL shortener form UI
-│       └── globals.css
-│
-└── testing/
-    ├── Dockerfile
-    ├── entrypoint.sh      # Wait for services → run tests
-    ├── playwright.config.ts
-    └── tests/
-        ├── url-shortener.e2e.spec.ts
-        └── url-shortener.integration.spec.ts
-```
+
+Integration tests call the REST API directly via Playwright's `request` fixture and verify persistence by querying MySQL with `mysql2`. E2E tests run a real Chromium browser against the frontend and interact with the UI through Playwright locators.
