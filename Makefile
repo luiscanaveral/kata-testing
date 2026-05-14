@@ -2,8 +2,6 @@
 
 BACKEND_PORT = $(shell grep ^BACKEND_PORT .env | cut -d= -f2)
 FRONTEND_PORT = $(shell grep ^FRONTEND_PORT .env | cut -d= -f2)
-DOCKER_HOST = $(shell ifconfig | grep "inet " | grep -v 127.0.0.1 | head -1 | awk '{print $$2}')
-
 up:
 	docker compose up --build
 
@@ -14,13 +12,13 @@ build:
 	docker compose build
 
 test:
-	cd testing && npm install && npx playwright install chromium && API_URL=http://$(DOCKER_HOST):$(BACKEND_PORT) FRONTEND_URL=http://$(DOCKER_HOST):$(FRONTEND_PORT) MYSQL_HOST=127.0.0.1 npx playwright test
+	cd testing && npm install && npx playwright install chromium && API_URL=http://localhost:$(BACKEND_PORT) FRONTEND_URL=http://localhost:$(FRONTEND_PORT) MYSQL_HOST=127.0.0.1 npx playwright test
 
 test-e2e:
-	cd testing && API_URL=http://$(DOCKER_HOST):$(BACKEND_PORT) FRONTEND_URL=http://$(DOCKER_HOST):$(FRONTEND_PORT) MYSQL_HOST=127.0.0.1 npx playwright test --grep @e2e
+	cd testing && API_URL=http://localhost:$(BACKEND_PORT) FRONTEND_URL=http://localhost:$(FRONTEND_PORT) MYSQL_HOST=127.0.0.1 npx playwright test --grep @e2e
 
 test-integration:
-	cd testing && API_URL=http://$(DOCKER_HOST):$(BACKEND_PORT) FRONTEND_URL=http://$(DOCKER_HOST):$(FRONTEND_PORT) MYSQL_HOST=127.0.0.1 npx playwright test --grep @integration
+	cd testing && API_URL=http://localhost:$(BACKEND_PORT) FRONTEND_URL=http://localhost:$(FRONTEND_PORT) MYSQL_HOST=127.0.0.1 npx playwright test --grep @integration
 
 backend:
 	cd backend && pip install -r requirements.txt && uvicorn app.main:app --reload --host 0.0.0.0 --port $(BACKEND_PORT)

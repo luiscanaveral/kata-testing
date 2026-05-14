@@ -18,7 +18,7 @@ test("@e2e user can shorten a URL via the frontend", async ({ page }) => {
 
   await expect(page.locator("text=Short URL:")).toBeVisible({ timeout: 10000 });
 
-  const shortUrl = await page.locator("a").nth(1).textContent();
+  const shortUrl = await page.locator("a").textContent();
   expect(shortUrl).toMatch(shortUrlPattern);
 });
 
@@ -31,7 +31,7 @@ test("@e2e shortened URL resolves to the original URL", async ({ page }) => {
 
   await expect(page.locator("text=Short URL:")).toBeVisible({ timeout: 10000 });
 
-  const shortUrl = (await page.locator("a").nth(1).textContent()) || "";
+  const shortUrl = (await page.locator("a").textContent()) || "";
   const response = await page.request.get(shortUrl);
   expect(response.ok()).toBeTruthy();
   const data = await response.json();
@@ -89,8 +89,8 @@ test("@e2e copy button is visible after shortening a URL", async ({ page }) => {
   await expect(page.locator("text=Copy")).toBeVisible({ timeout: 10000 });
 });
 
-test("@e2e copy button copies short URL to clipboard", async ({ page }) => {
-  await page.context.grantPermissions(["clipboard-read", "clipboard-write"]);
+test("@e2e copy button copies short URL to clipboard", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
 
   await page.goto("/");
   await page.fill('input[type="url"]', "https://example.com/clipboard-test");
@@ -117,7 +117,7 @@ test("@e2e multiple URLs can be shortened sequentially", async ({ page }) => {
     await page.click('button[type="submit"]');
     await expect(page.locator("text=Short URL:")).toBeVisible({ timeout: 10000 });
 
-    const shortUrl = await page.locator("a").nth(1).textContent();
+    const shortUrl = await page.locator("a").textContent();
     expect(shortUrl).toMatch(shortUrlPattern);
   }
 });
@@ -127,7 +127,7 @@ test("@e2e result section has green success styling", async ({ page }) => {
   await page.fill('input[type="url"]', "https://example.com/styling-test");
   await page.click('button[type="submit"]');
 
-  const resultBox = page.locator("div").filter({ has: page.locator("text=Short URL:") });
+  const resultBox = page.locator("p:has-text(\"Short URL:\")").locator("xpath=..");
   await expect(resultBox).toBeVisible({ timeout: 10000 });
   const bg = await resultBox.evaluate((el) => getComputedStyle(el).background);
   expect(bg).toContain("rgb(246, 255, 237)");
@@ -144,7 +144,7 @@ test("@e2e short URL link opens in new tab", async ({ page }) => {
   await page.fill('input[type="url"]', "https://example.com/target-test");
   await page.click('button[type="submit"]');
 
-  const link = page.locator("a").nth(1);
+  const link = page.locator("a");
   await expect(link).toBeVisible({ timeout: 10000 });
   await expect(link).toHaveAttribute("target", "_blank");
   await expect(link).toHaveAttribute("rel", "noopener noreferrer");
